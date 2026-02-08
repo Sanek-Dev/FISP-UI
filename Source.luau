@@ -1,6 +1,7 @@
 -- Globals
 local _cloneref = cloneref or function(v) return v end
 local RunService = _cloneref(game:GetService("RunService"))
+local UserInputService = _cloneref(game:GetService("UserInputService"))
 local IsStudio = RunService:IsStudio()
 local _CoreGui = IsStudio and nil or (gethui and gethui() or _cloneref(game:GetService("CoreGui")))
 local CustomAssets = {}
@@ -414,6 +415,50 @@ function Window.new(paramsTable)
 		end
 	})
 	topCloseBtn.HoverImage = CustomAssets.TopBarCloseButtonHover
+	
+	-- Drag system
+	local Dragging = false
+	local DragInput = nil
+	local DragStart = nil
+	local StartPos = nil
+
+	local UpdateFunc = function(input)
+		local delta = input.Position - DragStart
+		frame.Position = UDim2.new(StartPos.X.Scale, StartPos.X.Offset + delta.X, StartPos.Y.Scale, StartPos.Y.Offset + delta.Y)
+	end
+
+	local dragInputBeganConn = frame.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			Dragging = true
+			DragStart = input.Position
+			StartPos = frame.Position
+			
+			local changedConn = nil
+			changedConn = input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then
+					changedConn:Disconnect()
+					changedConn = nil
+					Dragging = false
+				end
+			end)
+		end
+	end)
+	table.insert(wnd.Connections, dragInputBeganConn)
+	
+	local dragInputChangedConn = frame.InputChanged:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+			DragInput = input
+		end
+	end)
+	table.insert(wnd.Connections, dragInputChangedConn)
+	
+	local uisInputChangedConn = UserInputService.InputChanged:Connect(function(input)
+		if input == DragInput and Dragging then
+			UpdateFunc(input)
+		end
+	end)
+	table.insert(wnd.Connections, uisInputChangedConn)
+	-- Drag system end
 	
 	return wnd
 end
