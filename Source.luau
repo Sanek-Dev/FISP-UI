@@ -3,9 +3,7 @@ local _cloneref = cloneref or function(v) return v end
 local RunService = _cloneref(game:GetService("RunService"))
 local IsStudio = RunService:IsStudio()
 local _CoreGui = IsStudio and nil or (gethui and gethui() or _cloneref(game:GetService("CoreGui")))
-local CustomAssets = {
-	["__Loaded"] = false
-}
+local CustomAssets = {}
 
 -- Constants
 local DEF_WINDOW_ROUNDING = 15
@@ -126,7 +124,7 @@ function LoadAsset(assetFilename, source)
 			return nil
 		end
 		
-		return assetPath
+		return getcustomasset(assetPath)
 	end
 	
 	local success = false
@@ -143,23 +141,7 @@ function LoadAsset(assetFilename, source)
 		return LoadAsset(assetFilename, source)
 	end
 	
-	return assetPath
-end
-
-function LoadCustomAssets()
-	if not AreCustomAssetsSupported() and not IsStudio then
-		warn("[FISP-LoadCustomAssets] Cannot load assets because your executor doesn\'t support getcustomasset/filesystem/requests library")
-		return
-	end
-	if CustomAssets.__Loaded then return end
-	
-	if IsStudio then
-		CustomAssets["TopBarCloseButton"] = "rbxassetid://122180942562671"
-	else
-		CustomAssets["TopBarCloseButton"] = LoadAsset("TopBarCloseButton.png", "https://raw.githubusercontent.com/Sanek-Dev/FISP-UI/refs/heads/main/Assets/UICloseButton.png")
-	end
-	
-	CustomAssets.__Loaded = true
+	return getcustomasset(assetPath)
 end
 
 -- UI Utils
@@ -413,12 +395,6 @@ function Window.new(paramsTable)
 	AddCorner(frame, paramsTable.Rounding or UDim.new(0, DEF_WINDOW_ROUNDING))
 	
 	local topBar, topBarElements = CreateWindowTopBar(frame, paramsTable)
-	
-	local dragDetector = Instance.new("UIDragDetector")
-	dragDetector.Parent = frame
-	dragDetector.ReferenceUIInstance = frame
-	dragDetector.Name = "WindowDragDetector"
-	dragDetector.DragRelativity = Enum.UIDragDetectorDragRelativity.Absolute
 	
 	local wnd = {}
 	wnd.Frame = frame
