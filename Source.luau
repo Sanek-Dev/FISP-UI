@@ -56,6 +56,71 @@ function CheckForFolder(folderName)
 	end
 end
 
+-- Credits to ChatGPT
+function dumpTable(tbl, indent, visited)
+	indent = indent or 0
+	visited = visited or {}
+
+	if visited[tbl] then
+		return string.rep(" ", indent) .. "\n"
+	end
+	visited[tbl] = true
+
+	local result = ""
+	local prefix = string.rep(" ", indent)
+
+	for key, value in pairs(tbl) do
+		local keyStr = tostring(key)
+		if keyStr == "__references" then continue end
+
+		local valueStr = ""
+
+		if typeof(value) == "Instance" then
+			valueStr = string.format(
+				"Instance (%s) \"%s\"",
+				value.ClassName,
+				value.Name
+			)
+
+		elseif type(value) == "table" then
+			valueStr = "{\n"
+			valueStr ..= dumpTable(value, indent + 4, visited)
+			valueStr ..= prefix .. "}"
+
+		else
+			valueStr = tostring(value)
+		end
+
+		result ..= string.format(
+			"%s[%s] = %s\n",
+			prefix,
+			keyStr,
+			valueStr
+		)
+	end
+
+	return result
+end
+
+function RecursiveCopyTable(source, destination, overrideExisting)
+	for k,v in pairs(source) do
+		if typeof(v) == "table" and destination[k] and typeof(destination[k]) == "table" then
+			RecursiveCopyTable(v, destination[k], overrideExisting)
+		elseif typeof(v) == "table" and not destination[k] then
+			destination[k] = {}
+			RecursiveCopyTable(v, destination[k], overrideExisting)
+		elseif typeof(v) ~= "table" then
+			if destination[k] and not overrideExisting then continue end
+			
+			if not IsStringNullOrEmpty(v) and v == "__nil" then
+				destination[k] = nil
+			else
+				destination[k] = v
+			end
+		end
+	end
+end
+
 -- Assets management
 function LoadAsset(assetFilename, source)
 	if not AreCustomAssetsSupported() then
@@ -173,6 +238,8 @@ function PaintElementColor(frame, paramsTable)
 		
 		if frame:IsA("TextLabel") or frame:IsA("TextBox") or frame:IsA("TextButton") then
 			frame.TextColor3 = Color3.fromRGB(255, 255, 255)
+		elseif frame:IsA("ImageLabel") or frame:IsA("ImageButton") then
+			frame.ImageColor3 = Color3.fromRGB(255, 255, 255)
 		end
 		
 		local gradient = Instance.new("UIGradient")
@@ -182,12 +249,29 @@ function PaintElementColor(frame, paramsTable)
 		gradient.Enabled = true
 		if paramsTable.Gradient.TransparencySequence then gradient.Transparency = paramsTable.Gradient.TransparencySequence end
 		if paramsTable.Gradient.Offset then gradient.Offset = paramsTable.Gradient.Offset end
-		
 	elseif paramsTable.Color then
-		if frame:IsA("TextLabel") or frame:IsA("TextBox") or frame:IsA("TextButton") then
-			frame.TextColor3 = paramsTable.Color
-		else
-			frame.BackgroundColor3 = paramsTable.Color
+		frame.BackgroundColor3 = paramsTable.Color
+	end
+	
+	if (frame:IsA("TextLabel") or frame:IsA("TextBox") or frame:IsA("TextButton")) and paramsTable.TextColor3 then
+		frame.TextColor3 = paramsTable.TextColor3
+	end
+	
+	if (frame:IsA("ImageLabel") or frame:IsA("ImageButton")) and paramsTable.ImageColor3 then
+		frame.ImageColor3 = paramsTable.ImageColor3
+	end
+	
+	if frame:IsA("ScrollingFrame") then
+		if paramsTable.ScrollBarImageColor then
+			frame.ScrollBarImageColor3 = paramsTable.ScrollBarImageColor
+		end
+		
+		if paramsTable.ScrollBarImageTransparency then
+			frame.ScrollBarImageTransparency = paramsTable.ScrollBarImageTransparency
+		end
+		
+		if paramsTable.ScrollBarThickness then
+			frame.ScrollBarThickness = paramsTable.ScrollBarThickness
 		end
 	end
 	
@@ -221,11 +305,73 @@ function SafeCallHandler(handler, ...)
 	end
 end
 
+-- IContentDisplay
+local IContentDisplay = {}
+IContentDisplay.__index = IContentDisplay
+
+function IContentDisplay.new(wnd, contentFrame)
+	if not wnd then error("No Window arg") end
+	if not contentFrame then error("No contentFrame") end
+	
+	local contentDisplay = {}
+	contentDisplay.ContentFrame = contentFrame
+	contentDisplay.Window = wnd
+	
+	return setmetatable(contentDisplay, IContentDisplay)
+end
+
+-- TabsContentDisplay
+local TabsContentDisplay = {}
+TabsContentDisplay.__index = TabsContentDisplay
+
+function TabsContentDisplay.new(wnd, contentFrame)
+	local Self = {}
+	Self.Base = IContentDisplay.new(wnd, contentFrame)
+	
+	local tabsFrame = Instance.new("ScrollingFrame")
+	tabsFrame.Parent = contentFrame
+	tabsFrame.Name = "TabsFrame"
+	tabsFrame.Position = UDim2.fromScale(0, 0)
+	tabsFrame.BorderSizePixel = 0
+	tabsFrame.Size = UDim2.fromScale(0.25, 1)
+	tabsFrame.CanvasPosition = Vector2.new(0, 0)
+	tabsFrame.CanvasSize = UDim2.fromScale(0, 1)
+	tabsFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	tabsFrame.ScrollingEnabled = true
+	tabsFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+	tabsFrame.Visible = true
+	
+	local separator = Instance.new("Frame")
+	separator.Parent = contentFrame
+	separator.Name = "Separator"
+	separator.Position = UDim2.fromScale(0.25, 0)
+	separator.Size = UDim2.fromScale(0.005, 1)
+	separator.BorderSizePixel = 0
+	separator.Visible = true
+	
+	if IsTable(wnd.ThemeParams.TabsContentDisplay) then
+		local params = wnd.ThemeParams.TabsContentDisplay
+		if IsTable(params.TabsFrame) then
+			PaintElementColor(tabsFrame, params.TabsFrame)
+		end
+		
+		if IsTable(params.Separator) then
+			PaintElementColor(separator, params.Separator)
+		end
+	end
+	
+	Self.TabsFrame = tabsFrame
+	
+	return setmetatable(Self, TabsContentDisplay)
+end
+
 -- Window
 local Window = {}
 Window.__index = Window
 
 function CreateWindowTopBar(frame, paramsTable)
+	if IsStringNullOrEmpty(paramsTable.TopBar.TitleType) then error("No paramsTable.TopBar.TitleType found") end
+	
 	local topBarR = Instance.new("Frame")
 	topBarR.Parent = frame
 	topBarR.Name = "TopBarRounding"
@@ -252,53 +398,83 @@ function CreateWindowTopBar(frame, paramsTable)
 	PaintElementColor(topBarR, paramsTable.TopBar)
 	PaintElementColor(topBarBottom, paramsTable.TopBar)
 	
-	local title = Instance.new("TextLabel")
-	title.Parent = topBar
-	title.Position = UDim2.fromScale(0.2, 0)
-	title.BorderSizePixel = 0
-	title.BackgroundTransparency = 1
-	title.Size = UDim2.fromScale(0.5, 1)
-	title.Name = "Title"
-	title.TextWrapped = true
-	title.TextStrokeTransparency = 1
-	title.Text = paramsTable.TopBar.Title or "No Title"
-	LimitTextSize(title, 1, 50)
-	
-	if paramsTable.TopBar.RichTitle then
-		title.RichText = true
+	local title = nil
+	if paramsTable.TopBar.TitleType == "Text" then
+		title = Instance.new("TextLabel")
+		title.Parent = topBar
+		title.Position = UDim2.fromScale(0.2, 0)
+		title.BorderSizePixel = 0
+		title.BackgroundTransparency = 1
+		title.Size = UDim2.fromScale(0.5, 1)
+		title.Name = "Title"
+		title.TextWrapped = true
+		title.TextStrokeTransparency = 1
+		title.Text = paramsTable.TopBar.Title or "No Title"
+		LimitTextSize(title, 1, 50)
+
+		if paramsTable.TopBar.RichTitle then
+			title.RichText = true
+		end
+
+		if paramsTable.TopBar.TitleFont then
+			title.FontFace = paramsTable.TopBar.TitleFont
+		end
+	elseif paramsTable.TopBar.TitleType == "Image" and not IsStringNullOrEmpty(paramsTable.TopBar.TitleImage) then
+		title = Instance.new("ImageLabel")
+		title.Parent = topBar
+		title.Position = UDim2.fromScale(0.2, 0)
+		title.BorderSizePixel = 0
+		title.BackgroundTransparency = 1
+		title.Size = UDim2.fromScale(0.5, 1)
+		title.Name = "Title"
+		title.Visible = true
+		title.ImageColor3 = Color3.fromRGB(255, 255, 255)
+		title.Image = paramsTable.TopBar.TitleImage
 	end
 	
-	if paramsTable.TopBar.TitleFont then
-		title.FontFace = paramsTable.TopBar.TitleFont
-	end
-	
-	if IsTable(paramsTable.TopBar.TitleColor) then
+	if title and IsTable(paramsTable.TopBar.TitleColor) then
 		PaintElementColor(title, paramsTable.TopBar.TitleColor)
 	end
 	
-	if IsTable(paramsTable.TopBar.SubTitle) then
-		local subTitle = Instance.new("TextLabel")
-		subTitle.Parent = topBar
-		subTitle.Name = "SubTitle"
-		subTitle.Position = UDim2.fromScale(0, 0)
-		subTitle.Size = UDim2.fromScale(0.2, 1)
-		subTitle.BackgroundTransparency = 1
-		subTitle.BorderSizePixel = 0
-		subTitle.TextStrokeTransparency = 1
-		subTitle.TextWrapped = true
-		subTitle.Visible = true
-		subTitle.Text = paramsTable.TopBar.SubTitle.Text or "Empty"
-		LimitTextSize(subTitle, 1, 20)
-		
-		if paramsTable.TopBar.SubTitle.RichText then
-			subTitle.RichText = true
+	if IsTable(paramsTable.TopBar.SubTitle) and not IsStringNullOrEmpty(paramsTable.TopBar.SubTitle.Type) then
+		local subTitle = nil
+		if paramsTable.TopBar.SubTitle.Type == "Text" and not IsStringNullOrEmpty(paramsTable.TopBar.SubTitle.Text) then
+			subTitle = Instance.new("TextLabel")
+			subTitle.Parent = topBar
+			subTitle.Name = "SubTitle"
+			subTitle.Position = UDim2.fromScale(0, 0)
+			subTitle.Size = UDim2.fromScale(0.2, 1)
+			subTitle.BackgroundTransparency = 1
+			subTitle.BorderSizePixel = 0
+			subTitle.TextStrokeTransparency = 1
+			subTitle.TextWrapped = true
+			subTitle.Visible = true
+			subTitle.Text = paramsTable.TopBar.SubTitle.Text or "Empty"
+			LimitTextSize(subTitle, 1, 20)
+
+			if paramsTable.TopBar.SubTitle.RichText then
+				subTitle.RichText = true
+			end
+
+			if paramsTable.TopBar.SubTitle.TextFont then
+				subTitle.FontFace = paramsTable.TopBar.SubTitle.TextFont
+			end
+		elseif paramsTable.TopBar.SubTitle.Type == "Image" and not IsStringNullOrEmpty(paramsTable.TopBar.SubTitle.Image) then
+			subTitle = Instance.new("ImageLabel")
+			subTitle.Parent = topBar
+			subTitle.Name = "SubTitle"
+			subTitle.Position = UDim2.fromScale(0, 0)
+			subTitle.Size = UDim2.fromScale(0.2, 1)
+			subTitle.BackgroundTransparency = 1
+			subTitle.BorderSizePixel = 0
+			subTitle.Visible = true
+			subTitle.ImageColor3 = Color3.fromRGB(255, 255, 255)
+			subTitle.Image = paramsTable.TopBar.SubTitle.Image
 		end
 		
-		if paramsTable.TopBar.SubTitle.TextFont then
-			subTitle.FontFace = paramsTable.TopBar.SubTitle.TextFont
+		if subTitle then
+			PaintElementColor(subTitle, paramsTable.TopBar.SubTitle)
 		end
-		
-		PaintElementColor(subTitle, paramsTable.TopBar.SubTitle)
 	end
 	
 	local elementsFrame = Instance.new("Frame")
@@ -371,6 +547,87 @@ function Window.AddTopBarButton(Self, paramsTable)
 	return btn
 end
 
+function Window.SetFooter(Self, paramsTable)
+	if not IsTable(paramsTable) then error("paramsTable cannot be nil") end
+	
+	if Self.Footer then
+	else
+		local footerR = Instance.new("Frame")
+		footerR.Parent = Self.Frame
+		footerR.Name = "FooterRounding"
+		footerR.BorderSizePixel = 0
+		footerR.Size = UDim2.fromScale(1, 0.1)
+		footerR.Position = UDim2.fromScale(0, 0.9)
+		local wndCorner = Self.Frame:FindFirstChildOfClass("UICorner")
+		wndCorner:Clone().Parent = footerR
+		
+		local footerB = Instance.new("Frame")
+		footerB.Parent = Self.Frame
+		footerB.BorderSizePixel = 0
+		footerB.Name = "FooterBottom"
+		footerB.Size = UDim2.fromScale(1, 0.05)
+		footerB.Position = UDim2.fromScale(0, 0.9)
+		
+		PaintElementColor(footerR, Self.ThemeParams.TopBar)
+		PaintElementColor(footerB, Self.ThemeParams.TopBar)
+		
+		local footer = Instance.new("Frame")
+		footer.Parent = Self.Frame
+		footer.BorderSizePixel = 0
+		footer.Name = "Footer"
+		footer.Position = UDim2.fromScale(0, 0.9)
+		footer.Size = UDim2.fromScale(1, 0.1)
+		footer.Visible = true
+		footer.BackgroundTransparency = 1
+		
+		if Self.ContentFrame then
+			Self.ContentFrame.Size = UDim2.fromScale(1, 0.8)
+		end
+		
+		Self.Footer = footer
+	end
+	
+	table.clear(paramsTable)
+	paramsTable = nil
+end
+
+function Window.GetFooterFrame(Self)
+	return Self.Footer
+end
+
+function Window.GetContentFrame(Self)
+	local frame = nil
+	if not Self.ContentFrame then
+		frame = Instance.new("Frame")
+		frame.Parent = Self.Frame
+		frame.Name = "Content"
+		frame.BorderSizePixel = 0
+		frame.Position = UDim2.fromScale(0, 0.1)
+		frame.Size = UDim2.fromScale(1, 0.9)
+		frame.Visible = true
+		frame.BackgroundTransparency = 1
+		
+		Self.ContentFrame = frame
+	else
+		frame = Self.ContentFrame
+	end
+	
+	if Self.Footer then
+		frame.Size = UDim2.fromScale(1, 0.8)
+	end
+	
+	return frame
+end
+
+function Window.SetBodyContentDisplayAsTabs(Self)
+	if Self.BodyContentDisplay then error("body content frame already has content display attached") end
+	
+	local contentDisplay = TabsContentDisplay.new(Self, Self:GetContentFrame())
+	Self.BodyContentDisplay = contentDisplay
+	
+	return contentDisplay
+end
+
 function Window.new(paramsTable)
 	if not IsTable(paramsTable) then error("paramsTable cannot be nil") end
 	if not IsTable(paramsTable.TopBar) then error("paramsTable.TopBar cannot be nil") end
@@ -381,8 +638,15 @@ function Window.new(paramsTable)
 	
 	frame.AnchorPoint = Vector2.new(0.5, 0.5)
 	frame.Position = paramsTable.StartPosition or UDim2.fromScale(0.5, 0.5)
+	if paramsTable.StartPositionOffset then 
+		frame.Position = UDim2.new(frame.Position.X.Scale + paramsTable.StartPositionOffset.X.Scale, frame.Position.X.Offset + paramsTable.StartPositionOffset.X.Offset, frame.Position.Y.Scale + paramsTable.StartPositionOffset.Y.Scale, frame.Position.Y.Offset + paramsTable.StartPositionOffset.Y.Offset)
+	end
 	frame.Size = paramsTable.Size or UDim2.fromScale(0.5, 0.7)
 	frame.BorderSizePixel = 0
+	
+	if paramsTable.ZIndex then
+		frame.ZIndex = paramsTable.ZIndex
+	end
 	
 	if not paramsTable.DontUseAspectRatioConstraint then
 		local aspectRatioConstraint = Instance.new("UIAspectRatioConstraint")
@@ -404,6 +668,8 @@ function Window.new(paramsTable)
 		["ElementsFrame"] = topBarElements
 	}
 	wnd.Connections = {}
+	wnd.ThemeParams = paramsTable
+	wnd.BodyContentDisplay = nil
 	wnd = setmetatable(wnd, Window)
 	
 	local topCloseBtn = wnd:AddTopBarButton({
@@ -489,6 +755,7 @@ Library.ThemesData = {
 			},
 			-- ["BackgroundTransparency"] = 0.2,
 			["TopBar"] = {
+				["TitleType"] = "Text",
 				["Color"] = Color3.fromRGB(227, 227, 227),
 				["TitleColor"] = {
 					["Gradient"] = {
@@ -498,8 +765,19 @@ Library.ThemesData = {
 				},
 				["TitleFont"] = Font.fromName("RobotoMono", Enum.FontWeight.Regular, Enum.FontStyle.Normal),
 				["SubTitle"] = {
+					["Type"] = "Text",
 					["Color"] = Color3.fromRGB(0, 0, 0),
 					["TextFont"] = Font.fromName("RobotoMono", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+				}
+			},
+			["TabsContentDisplay"] = {
+				["TabsFrame"] = {
+					["Color"] = Color3.fromRGB(39, 39, 39),
+					["ScrollBarThickness"] = 4,
+					["ScrollBarImageColor"] = Color3.fromRGB(94, 94, 94)
+				},
+				["Separator"] = {
+					["Color"] = Color3.fromRGB(227, 227, 227)
 				}
 			}
 		},
@@ -516,6 +794,17 @@ Library.ThemesData = {
 				["Exec"] = {
 					["FileName"] = "TopBarCloseButtonHover.png",
 					["Source"] = "https://raw.githubusercontent.com/Sanek-Dev/FISP-UI/main/Assets/UICloseButtonHover.png"
+				}
+			}
+		}
+	},
+	["LightDarkTransparent"] = {
+		["BasedOn"] = "LightDark",
+		["WindowParams"] = {
+			["BackgroundTransparency"] = 0.15,
+			["TabsContentDisplay"] = {
+				["TabsFrame"] = {
+					["BackgroundTransparency"] = 1
 				}
 			}
 		}
@@ -552,6 +841,18 @@ function Library.AddTheme(Self, themeName, themeTable)
 	if not IsTable(themeTable.WindowParams) then error("themeTable has no WindowParams") end
 	if Self._ThemesData[themeName] then error("Theme with name\""..themeName.."\" already exists") end
 	
+	if not IsStringNullOrEmpty(themeTable.BasedOn) then
+		local baseTable = Self._ThemesData[themeTable.BasedOn]
+		if not baseTable then error("BasedOn theme table not found") end
+		
+		if IsTable(baseTable.Assets) and not IsTable(themeTable.Assets) then
+			themeTable.Assets = {}
+			RecursiveCopyTable(baseTable.Assets, themeTable.Assets)
+		end
+		
+		RecursiveCopyTable(baseTable.WindowParams, themeTable.WindowParams)
+	end
+	
 	Self._ThemesData[themeName] = themeTable
 end
 
@@ -578,11 +879,27 @@ function Library.new(paramsTable)
 	local lib = {}
 	lib.Theme = paramsTable.Theme
 	lib._ThemesData = {}
+	lib.Windows = {}
+	lib.LastWindowAutoPosOffset = UDim2.fromScale(0, 0)
+	lib.LastWindowZIndex = 1
+	lib = setmetatable(lib, Library)
+	
+	local queuedThemes = {}
 	for k,v in pairs(Library.ThemesData) do
-		lib._ThemesData[k] = v
+		if not IsStringNullOrEmpty(v.BasedOn) then
+			queuedThemes[k] = v
+			continue
+		end
+		
+		lib:AddTheme(k, v)
 	end
 	
-	lib = setmetatable(lib, Library)
+	for k,v in pairs(queuedThemes) do
+		lib:AddTheme(k, v)
+	end
+	table.clear(queuedThemes)
+	queuedThemes = nil
+	
 	lib:LoadAssets()
 	
 	local UiContainer = IsStudio and GetPlayerGui() or _CoreGui
@@ -609,11 +926,12 @@ function Library.CreateWindowWithParams(Self, paramsTable)
 	return Window.new(paramsTable)
 end
 
-function Library.CreateWindow(Self, title, subTitle)
+function Library.CreateWindow(Self, title, subTitle, additionalParams)
 	if IsStringNullOrEmpty(title) then error("Missing title argument") end
 	
-	local params = Self._ThemesData[Self.Theme]
-	if not IsTable(params) then error("Invalid theme (no data)") end
+	if not IsTable(Self._ThemesData[Self.Theme]) then error("Invalid theme (no data)") end
+	local params = {}
+	RecursiveCopyTable(Self._ThemesData[Self.Theme], params)
 	params = params.WindowParams
 	if not IsTable(params) then error("Theme data has no WindowParams") end
 	
@@ -623,7 +941,49 @@ function Library.CreateWindow(Self, title, subTitle)
 	end
 	params.Parent = Self.GUI
 	
-	return Window.new(params)
+	if not additionalParams then additionalParams = {} end
+	if (not additionalParams.StartPosition and not additionalParams.StartPositionOffset) and #Self.Windows > 0 then
+		local newOffset = UDim2.fromScale(Self.LastWindowAutoPosOffset.X.Scale + 0.01, Self.LastWindowAutoPosOffset.Y.Scale + 0.01)
+		additionalParams.StartPositionOffset = newOffset
+		Self.LastWindowAutoPosOffset = newOffset
+	end
+	
+	if not additionalParams.ZIndex then
+		additionalParams.ZIndex = Self.LastWindowZIndex
+		Self.LastWindowZIndex += 1
+	end
+	
+	if IsTable(additionalParams) then
+		RecursiveCopyTable(additionalParams, params, true)
+		
+		table.clear(additionalParams)
+		additionalParams = nil
+	end
+	
+	local wnd = Window.new(params)
+	table.insert(Self.Windows, wnd)
+	
+	return wnd
+end
+
+function Library.CreateWindowWithImageTopBar(Self, titleImage, subTitleImage, additionalParams)
+	if IsStringNullOrEmpty(titleImage) then error("Invalid title image argument!") end
+	
+	if not additionalParams then additionalParams = {} end
+	if not IsTable(additionalParams.TopBar) then additionalParams.TopBar = {} end
+	if not additionalParams.TopBar.TitleColor then additionalParams.TopBar.TitleColor = "__nil" end
+	additionalParams.TopBar.TitleType = "Image"
+	additionalParams.TopBar.TitleImage = titleImage
+	
+	if not IsStringNullOrEmpty(subTitleImage) then
+		if not additionalParams.TopBar.SubTitle then additionalParams.TopBar.SubTitle = {} end
+		
+		additionalParams.TopBar.SubTitle.Type = "Image"
+		if not additionalParams.TopBar.SubTitle.Color then additionalParams.TopBar.SubTitle.Color = "__nil" end
+		additionalParams.TopBar.SubTitle.Image = subTitleImage
+	end
+	
+	return Library.CreateWindow(Self, "Blank", "Blank", additionalParams)
 end
 
 return Library
